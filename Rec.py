@@ -1,7 +1,7 @@
 from data.loader import FileIO
 
 
-class SELFRec(object):
+class Rec(object):
     def __init__(self, config):
         self.social_data = []
         self.feature_data = []
