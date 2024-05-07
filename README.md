@@ -21,7 +21,7 @@ we synthesize new data samples, thereby addressing the data scarcity issue for t
 
 
 
-![Framework](/fig/f0.png)
+![Framework](f0.png)
 
 ## Citation
 If you find RecRanker useful in your research or applications, please kindly cite:
