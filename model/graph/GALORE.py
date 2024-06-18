@@ -13,31 +13,29 @@ import scipy.sparse as sp
 torch.cuda.current_device()
 
 
-class GALR(GraphRecommender):
+class GALORE(GraphRecommender):
     def __init__(self, conf, training_set, test_set,test_set1,test_set2,valid_set):
-        super(GALR, self).__init__(conf, training_set, test_set,test_set1,test_set2,valid_set)
-        args = OptionConf(self.config['GALR'])
+        super(GALORE, self).__init__(conf, training_set, test_set,test_set1,test_set2,valid_set)
+        args = OptionConf(self.config['GALORE'])
         self.n_layers = int(args['-n_layer'])
-        # print(args.keys())
         self.train_mode = self.config['train_mode']
         self.emb_size_ = self.config['embbedding.size']
         self.cluster_num = float(self.config['cluster_num'])
         self.cl_rate = 0.5
         self.eps = 0.1
         self.temp = 0.15
-        self.model = LGCN_Encoder(self.data, self.emb_size, self.n_layers)
+
+        self.n_layers = int(args['-n_layer'])
+        self.layer_cl = int(args['-l*'])
+        self.model = GALORE_Encoder(self.data, self.emb_size, self.eps, self.n_layers,self.layer_cl)
         self.drop_rate = float(self.config['drop_rate'])
         self.dataset_dir = f"./dataset/{self.config['dataset']}"
 
 
-
-    
-
-    
-
     def train(self):
         model = self.model.cuda()
         save_model_dir = f'./model_cpt/{self.config["dataset"]}'
+        ### load a pre-trained recommendation model ###
         model.load_state_dict(torch.load(save_model_dir + f'/lightgcn_best_{self.emb_size_}.pt'))
         self.user_emb, self.item_emb = model._get_embedding()
         model._load_model(self.user_emb,self.item_emb)
@@ -46,7 +44,6 @@ class GALR(GraphRecommender):
         popupar_item_list = pickle.load(open("{}/popular_item_list.pkl".format(self.dataset_dir), "rb"))
         popular_item_list_str = [str(_) for _ in popupar_item_list]
         
-
         ### Drop edge ###
         user_lc_dict=pickle.load(open("{}/user_lc_dict.pkl".format(self.dataset_dir), "rb")) 
         item_lc_dict=pickle.load(open("{}/item_lc_dict.pkl".format(self.dataset_dir), "rb")) 
@@ -86,17 +83,19 @@ class GALR(GraphRecommender):
             local_nor_adj,_,_ = model.graph_add_edge(sim_dict,user_lc_dict_, item_lc_dict_,drop_rate=self.drop_rate)
             for n, batch in enumerate(adaptive_next_batch_pairwise(self.data, self.batch_size, popular_item_list_str=popular_item_list_str)):
                 user_idx, pos_idx, neg_idx, lt_idx = batch
-                rec_user_emb, rec_item_emb = model(sparse_norm_adj=local_nor_adj)#sparse_norm_adj=local_nor_adj
+                rec_user_emb, rec_item_emb = model(perturbed_adj=local_nor_adj,perturbed=False)#sparse_norm_adj=local_nor_adj
                 user_emb, pos_item_emb, neg_item_emb = rec_user_emb[user_idx], rec_item_emb[pos_idx], rec_item_emb[neg_idx]
                 # Sampling Mixup #
                 random_v = ( torch.rand( (user_emb.shape[0],1) ).cuda() * 0.5 ).repeat(1,user_emb.shape[1])
                 neg_item_emb = (1 - random_v) * neg_item_emb + random_v * pos_item_emb  
-                batch_loss =  adaptive_bpr_loss_upsampling(user_emb, pos_item_emb, neg_item_emb,lt_idx,upindex=self.cluster_num) + l2_reg_loss(self.reg, user_emb,pos_item_emb,neg_item_emb)/self.batch_size
+                batch_loss =  bpr_loss(user_emb, pos_item_emb, neg_item_emb)+ l2_reg_loss(self.reg, user_emb,pos_item_emb)
+                # adaptive_bpr_loss_upsampling(user_emb, pos_item_emb, neg_item_emb,lt_idx,upindex=self.cluster_num) 
+                # neg_item_emb)/self.batch_size
                 optimizer.zero_grad()
                 batch_loss.backward()
                 optimizer.step()
                 if n % 100 == 0:
-                    print('training:', epoch + 1, 'batch', n, 'batch_loss:', batch_loss.item(), 'cl_loss')
+                    print('training:', epoch + 1, 'batch', n, 'batch_loss:', batch_loss.item())
             with torch.no_grad():
                 self.user_emb, self.item_emb = model()
             if epoch> 5 and epoch % 2 == 0:
@@ -115,9 +114,9 @@ class GALR(GraphRecommender):
             return score.cpu().numpy()
 
 
-class GALR_Encoder(nn.Module):
+class GALORE_Encoder(nn.Module):
     def __init__(self, data, emb_size, eps, n_layers, layer_cl):
-        super(GALR_Encoder, self).__init__()
+        super(GALORE_Encoder, self).__init__()
         self.data = data
         self.eps = eps
         self.emb_size = emb_size
@@ -185,7 +184,6 @@ class GALR_Encoder(nn.Module):
         '''
         proba_list = np.ones_like(user_np, dtype=np.float32)
         user_np_length = user_np.shape[0]
-        # print(edge_count, user_np_length)
         for i in range(user_np_length):
             proba_list[i] = user_lc_dict[user_np[i]] * item_lc_dict[item_np[i]]
            
